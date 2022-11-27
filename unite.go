@@ -121,6 +121,43 @@ func (f *file) Write(b []byte) (n int, err error) {
 	}
 }
 
+func (f *file) Read(b []byte) (n int, err error) {
+
+	for {
+		beginAddr := UnBigEndian(f.current.seq) * METASIZE
+		currentMetaOffset := f.cursor - beginAddr
+
+		metaRemain := UnBigEndian(f.current.effective) - currentMetaOffset
+
+		var bb []byte
+		if metaRemain > int64(len(b)) {
+			bb = make([]byte, len(b))
+		} else {
+			bb = make([]byte, metaRemain)
+		}
+
+		nn := copy(bb, f.current.data[currentMetaOffset:])
+
+		copy(b, bb)
+		b = b[nn:]
+		f.cursor += int64(nn)
+		n += nn
+
+		if len(b) != 0 {
+			err = f.nextMeta()
+			if err != nil {
+				return n, err
+			}
+		} else {
+			return n, nil
+		}
+	}
+}
+
+func (*file) Close() error {
+	return nil
+}
+
 func (f *file) createNewMeta() error {
 
 	// create new meta
@@ -172,48 +209,6 @@ func (f *file) nextMeta() error {
 	}
 	nextMeta = (*meta)(unsafe.Pointer(&b[0]))
 	f.current = nextMeta
-	return nil
-}
-
-func (f *file) Read(b []byte) (n int, err error) {
-
-	for {
-
-		beginAddr := UnBigEndian(f.current.seq) * METASIZE
-		currentMetaOffset := f.cursor - beginAddr
-		offset := UnBigEndian(f.current.offset)
-
-		metaRemain := UnBigEndian(f.current.effective) - currentMetaOffset
-
-		var bb []byte
-		if metaRemain > int64(len(b)) {
-			bb = make([]byte, len(b))
-		} else {
-			bb = make([]byte, metaRemain)
-		}
-
-		nn, err := f.file.ReadAt(bb, offset+int64(unsafe.Offsetof(f.current.data))+currentMetaOffset)
-		if err != nil {
-			return nn, err
-		}
-
-		copy(b, bb)
-		b = b[nn:]
-		f.cursor += int64(nn)
-		n += nn
-
-		if len(b) != 0 {
-			err = f.nextMeta()
-			if err != nil {
-				return n, err
-			}
-		} else {
-			return n, nil
-		}
-	}
-}
-
-func (*file) Close() error {
 	return nil
 }
 
@@ -270,9 +265,42 @@ func (u *uniteFile) Create(name string) (*file, error) {
 	sha.Write([]byte(name))
 	symbol := sha.Sum(nil)[:8]
 
-	for _, v := range u.headers {
+	sy := [8]byte{}
+	copy(sy[:], symbol)
+
+	for k, v := range u.headers {
 		if bytes.Compare(v.fileSymbol[:], symbol) == 0 {
 			return nil, AlreadyExists
+		}
+
+		if bytes.Compare(v.fileSymbol[:], zero[:]) == 0 {
+
+			if v.originData == zero {
+				continue
+			} else {
+
+				u.headers[k].fileSymbol = sy
+				_, err := u.file.WriteAt(sy[:], UnBigEndian(v.offset)+int64(unsafe.Offsetof(v.fileSymbol)))
+				if err != nil {
+					return nil, err
+				}
+
+				var m meta
+				b := make([]byte, unsafe.Sizeof(mMode))
+				_, err = u.file.ReadAt(b, UnBigEndian(v.originData))
+				if err != nil {
+					return nil, err
+				}
+
+				m = *(*meta)(unsafe.Pointer(&b[0]))
+
+				return &file{
+					file:    u.file,
+					head:    &m,
+					current: &m,
+					cursor:  0,
+				}, err
+			}
 		}
 	}
 
@@ -285,8 +313,6 @@ func (u *uniteFile) Create(name string) (*file, error) {
 			return nil, err
 		}
 
-		sy := [8]byte{}
-		copy(sy[:], symbol)
 		h := header{
 			offset:     BigEndian(offset),
 			seq:        BigEndian(UnBigEndian(tail.seq) + 1),
@@ -294,7 +320,7 @@ func (u *uniteFile) Create(name string) (*file, error) {
 			originData: BigEndian(offset + int64(unsafe.Sizeof(hMode))),
 			size:       zero,
 			next:       zero,
-			previous:   zero,
+			previous:   tail.offset,
 			end:        true,
 		}
 

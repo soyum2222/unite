@@ -214,5 +214,110 @@ func TestReadHuge(t *testing.T) {
 		}
 	}
 
-	file.Close()
+	_ = file.Close()
+}
+
+func TestWriteMultiple(t *testing.T) {
+
+	TestCreateUniteFile(t)
+
+	unite, err := OpenUniteFile("./test.unite")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	file, err := unite.Create("unite.data")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	_, err = file.Write([]byte("hello"))
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	_, err = file.Write([]byte(" "))
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	_, err = file.Write([]byte("world"))
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	_ = unite.Close()
+}
+
+func TestReadMultiple(t *testing.T) {
+
+	TestWriteMultiple(t)
+
+	unite, err := OpenUniteFile("./test.unite")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	file, err := unite.Open("unite.data")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	b := make([]byte, 5)
+	n, err := file.Read(b)
+	if err != nil && err != io.EOF {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	if string(b[:n]) != "hello" {
+		fmt.Println("read error")
+		t.Fail()
+		return
+	}
+
+	b = make([]byte, 1)
+	n, err = file.Read(b)
+	if err != nil && err != io.EOF {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	if string(b[:n]) != " " {
+		fmt.Println("read error")
+		t.Fail()
+		return
+	}
+
+	b = make([]byte, 5)
+	n, err = file.Read(b)
+	if err != nil && err != io.EOF {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	if string(b[:n]) != "world" {
+		fmt.Println("read error")
+		t.Fail()
+		return
+	}
+
+	_ = file.Close()
 }
