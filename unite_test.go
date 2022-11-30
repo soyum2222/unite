@@ -133,6 +133,43 @@ func TestFile_Read(t *testing.T) {
 	}
 }
 
+func TestRemove(t *testing.T) {
+
+	TestCreateUniteFile(t)
+
+	TestFile_Write(t)
+
+	unite, err := OpenUniteFile("./test.unite")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	err = unite.Remove("unite.txt")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	file, err := unite.Create("foo.txt")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	_, err = file.Write([]byte("hello world"))
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	_ = unite.Close()
+}
+
 func TestWriteHuge(t *testing.T) {
 
 	TestCreateUniteFile(t)
