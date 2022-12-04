@@ -160,7 +160,36 @@ func TestRemove(t *testing.T) {
 		return
 	}
 
-	_, err = file.Write([]byte("hello world"))
+	b := make([]byte, 1<<30)
+
+	for k := range b {
+		b[k] = byte(k)
+	}
+
+	_, err = file.Write(b)
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	err = unite.Remove("foo.txt")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	_ = unite.Close()
+
+	unite, err = OpenUniteFile("./test.unite")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	file, err = unite.Create("foo.txt")
 	if err != nil {
 		fmt.Println(err)
 		t.Fail()
@@ -357,4 +386,65 @@ func TestReadMultiple(t *testing.T) {
 	}
 
 	_ = file.Close()
+}
+
+func TestGetFileName(t *testing.T) {
+
+	TestCreateUniteFile(t)
+
+	unite, err := OpenUniteFile("./test.unite")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	file, err := unite.Create("unite.data")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	err = file.Close()
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	file, err = unite.Create("unite1.data")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	err = file.Close()
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	list := unite.FileList()
+	if len(list) != 2 {
+		fmt.Println("file list error")
+		t.Fail()
+		return
+	}
+
+	if list[0] != "unite.data" {
+		fmt.Println("file list error")
+		t.Fail()
+		return
+	}
+
+	if list[1] != "unite1.data" {
+		fmt.Println("file list error")
+		t.Fail()
+		return
+	}
+
+	_ = unite.Close()
 }

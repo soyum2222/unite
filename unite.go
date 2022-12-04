@@ -39,6 +39,9 @@ type header struct {
 var hMode header
 var mMode meta
 
+var zero = BigEndian(0)
+var max = [8]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+
 type meta struct {
 	offset    [8]byte
 	seq       [8]byte
@@ -52,7 +55,7 @@ type meta struct {
 
 type uniteFile struct {
 	mu      sync.RWMutex
-	file    *os.File
+	file    *syncFile
 	headers []header
 	//idleHeaders *header
 	idleMetas *meta
@@ -66,6 +69,9 @@ type file struct {
 }
 
 func (f *file) Write(b []byte) (n int, err error) {
+
+	f.u.mu.Lock()
+	defer f.u.mu.Unlock()
 
 	if f.head == nil {
 		meta, err := f.u.createNewMeta(&mMode)
@@ -138,6 +144,9 @@ func (f *file) Write(b []byte) (n int, err error) {
 }
 
 func (f *file) Read(b []byte) (n int, err error) {
+
+	f.u.mu.RLock()
+	defer f.u.mu.RUnlock()
 
 	for {
 		beginAddr := UnBigEndian(f.current.seq) * METASIZE
@@ -258,8 +267,6 @@ func (f *file) nextMeta() error {
 	f.current = nextMeta
 	return nil
 }
-
-var zero = BigEndian(0)
 
 func BigEndian(i int64) [8]byte {
 	b := [8]byte{}
@@ -431,7 +438,7 @@ func (u *uniteFile) Remove(name string) error {
 
 		if bytes.Compare(u.headers[k].fileSymbol[:], symbol) == 0 {
 			u.headers[k].fileSymbol = zero
-			_, err := u.file.WriteAt(zero[:], UnBigEndian(u.headers[k].originData)+int64(unsafe.Offsetof(hMode.fileSymbol)))
+			_, err := u.file.WriteAt(zero[:], UnBigEndian(u.headers[k].offset)+int64(unsafe.Offsetof(hMode.fileSymbol)))
 			if err != nil {
 				return err
 			}
@@ -458,29 +465,27 @@ func (u *uniteFile) Remove(name string) error {
 					m.seq = zero
 					m.effective = zero
 
+					next = m.next
+
 					if u.idleMetas != nil {
-						m.previous = u.idleMetas.offset
+
+						u.idleMetas.next = m.offset
+						_, err = u.file.WriteAt(m.offset[:], UnBigEndian(u.idleMetas.previous)+int64(unsafe.Offsetof(mMode.next)))
+						if err != nil {
+							return err
+						}
+
+						m.next = u.idleMetas.offset
+						m.previous = zero
 					}
 
-					data := *(*[unsafe.Offsetof(mMode.data)]byte)(unsafe.Pointer(&m))
-					_, err = u.file.WriteAt(data[:], UnBigEndian(m.offset))
+					_, err = u.file.WriteAt(b[:], UnBigEndian(m.offset))
 					if err != nil {
 						return err
 					}
 
-					if u.idleMetas != nil {
-						if u.idleMetas.next != m.offset {
-							u.idleMetas.next = m.offset
-							_, err = u.file.WriteAt(u.idleMetas.offset[:], UnBigEndian(u.idleMetas.offset)+int64(unsafe.Offsetof(mMode.previous)))
-							if err != nil {
-								return err
-							}
-						}
-					}
-
 					u.idleMetas = m
 
-					next = m.next
 				}
 			}
 
@@ -489,6 +494,23 @@ func (u *uniteFile) Remove(name string) error {
 	}
 
 	return nil
+}
+
+// FileList return all file name
+func (u *uniteFile) FileList() []string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	var list []string
+
+	for k := range u.headers {
+		if u.headers[k].fileSymbol != zero && u.headers[k].fileSymbol != max {
+			i := bytes.IndexByte(u.headers[k].fileName[:], 0)
+			list = append(list, string(u.headers[k].fileName[:i]))
+		}
+	}
+
+	return list
 }
 
 func (u *uniteFile) Close() error {
@@ -506,10 +528,10 @@ func CreateUniteFile(path string) (*uniteFile, error) {
 		return nil, err
 	}
 
-	h := header{
+	originHeader := header{
 		offset:     BigEndian(int64(len([]byte(MAGIC)))),
 		seq:        zero,
-		fileSymbol: [8]byte{},
+		fileSymbol: max,
 		fileName:   [32]byte{},
 		originData: zero,
 		size:       zero,
@@ -518,14 +540,14 @@ func CreateUniteFile(path string) (*uniteFile, error) {
 		end:        true,
 	}
 
-	_, err = f.Write((*(*[unsafe.Sizeof(h)]byte)(unsafe.Pointer(&h)))[:unsafe.Sizeof(hMode)])
+	_, err = f.Write((*(*[unsafe.Sizeof(hMode)]byte)(unsafe.Pointer(&originHeader)))[:unsafe.Sizeof(hMode)])
 	if err != nil {
 		return nil, err
 	}
 
 	return &uniteFile{
-		headers: append([]header{}, h),
-		file:    f,
+		headers: append([]header{}, originHeader),
+		file:    &syncFile{File: f},
 	}, nil
 }
 
@@ -555,40 +577,24 @@ func OpenUniteFile(path string) (*uniteFile, error) {
 	}
 
 	var hs []header
-	var idleHeaders []header
-	var idleMeta []meta
+	var m *meta
 
 	for {
 		h := *(*header)(unsafe.Pointer(&hd[0]))
 		hs = append(hs, h)
 
-		if h.fileSymbol == zero {
-			idleHeaders = append(idleHeaders, h)
+		if h.fileSymbol == max {
 
-			var next [8]byte
-			next = h.originData
-			for {
-				if next != zero {
-					var m *meta
+			next := h.originData
 
-					b := make([]byte, METASIZE)
-					_, err = f.ReadAt(hd, UnBigEndian(next))
-					if err != nil {
-						return nil, err
-					}
-
-					m = (*meta)(unsafe.Pointer(&b[0]))
-
-					idleMeta = append(idleMeta, *m)
-
-					if m.next == zero {
-						break
-					} else {
-						next = m.next
-					}
-				} else {
-					break
+			if next != zero {
+				b := make([]byte, unsafe.Offsetof(mMode.data))
+				_, err = f.ReadAt(hd, UnBigEndian(next))
+				if err != nil {
+					return nil, err
 				}
+
+				m = (*meta)(unsafe.Pointer(&b[0]))
 			}
 		}
 
@@ -606,61 +612,9 @@ func OpenUniteFile(path string) (*uniteFile, error) {
 		}
 	}
 
-	// link idle meta
-	var anchorMeta *meta
-	if len(idleMeta) == 0 {
-		anchorMeta = nil
-	} else {
-
-		for k := range idleMeta {
-
-			if anchorMeta == nil {
-
-				anchorMeta = &idleMeta[k]
-
-				originHand := hs[0]
-				originHand.originData = anchorMeta.offset
-				_, err = f.WriteAt(originHand.offset[:], UnBigEndian(originHand.originData)+int64(unsafe.Offsetof(hMode.originData)))
-				if err != nil {
-					return nil, err
-				}
-
-				continue
-			}
-
-			anchorMeta.next = idleMeta[k].offset
-			_, err = f.WriteAt(anchorMeta.next[:], UnBigEndian(anchorMeta.offset)+int64(unsafe.Offsetof(mMode.next)))
-			if err != nil {
-				return nil, err
-			}
-
-			idleMeta[k].previous = anchorMeta.offset
-			idleMeta[k].seq = zero
-			idleMeta[k].effective = zero
-			idleMeta[k].start = zero
-			idleMeta[k].end = zero
-
-			data := *(*[unsafe.Offsetof(mMode.data)]byte)(unsafe.Pointer(&idleMeta))
-			_, err = f.WriteAt(data[:], UnBigEndian(idleMeta[k].offset))
-			if err != nil {
-				return nil, err
-			}
-
-			if k == len(idleMeta)-1 {
-				idleMeta[k].next = zero
-				_, err = f.WriteAt(idleMeta[k].next[:], UnBigEndian(idleMeta[k].offset)+int64(unsafe.Offsetof(mMode.next)))
-				if err != nil {
-					return nil, err
-				}
-			}
-
-			anchorMeta = &idleMeta[k]
-		}
-	}
-
 	return &uniteFile{
-		file:      f,
+		file:      &syncFile{File: f},
 		headers:   hs,
-		idleMetas: anchorMeta,
+		idleMetas: m,
 	}, nil
 }
