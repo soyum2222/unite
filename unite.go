@@ -42,6 +42,16 @@ var mMode meta
 var zero = BigEndian(0)
 var max = [8]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
 
+func BigEndian(i int64) [8]byte {
+	b := [8]byte{}
+	binary.BigEndian.PutUint64(b[:], uint64(i))
+	return b
+}
+
+func UnBigEndian(b [8]byte) int64 {
+	return int64(binary.BigEndian.Uint64(b[:]))
+}
+
 type meta struct {
 	offset    [8]byte
 	seq       [8]byte
@@ -51,14 +61,6 @@ type meta struct {
 	next      [8]byte
 	previous  [8]byte
 	data      [METASIZE]byte
-}
-
-type uniteFile struct {
-	mu      sync.RWMutex
-	file    *syncFile
-	headers []header
-	//idleHeaders *header
-	idleMetas *meta
 }
 
 type file struct {
@@ -183,73 +185,6 @@ func (*file) Close() error {
 	return nil
 }
 
-func (u *uniteFile) createNewMeta(previous *meta) (*meta, error) {
-
-	var newMeta *meta
-
-	if u.idleMetas != nil {
-
-		m := u.idleMetas
-
-		b := make([]byte, unsafe.Offsetof(mMode.data))
-
-		if m.previous == zero {
-			u.idleMetas = nil
-		} else {
-
-			_, err := u.file.ReadAt(b, UnBigEndian(m.previous))
-			if err != nil {
-				return nil, err
-			}
-
-			previous := (*meta)(unsafe.Pointer(&b[0]))
-
-			previous.next = zero
-			_, err = u.file.WriteAt(previous.next[:], UnBigEndian(previous.offset)+int64(unsafe.Offsetof(mMode.next)))
-			if err != nil {
-				return nil, err
-			}
-
-			u.idleMetas = previous
-		}
-
-		return m, nil
-
-	} else {
-
-		// create new meta
-		offset, err := u.file.Seek(0, 2)
-		if err != nil {
-			return nil, err
-		}
-
-		newMeta = &meta{
-			offset:    BigEndian(offset),
-			seq:       BigEndian(UnBigEndian(previous.seq) + 1),
-			start:     zero,
-			end:       BigEndian(METASIZE),
-			effective: zero,
-			next:      zero,
-			previous:  previous.offset,
-		}
-
-		_, err = u.file.Write((*(*[unsafe.Sizeof(mMode)]byte)(unsafe.Pointer(newMeta)))[:])
-		if err != nil {
-			return nil, err
-		}
-
-		b := BigEndian(offset)
-		_, err = u.file.WriteAt(b[:], UnBigEndian(previous.offset)+int64(unsafe.Offsetof(previous.next)))
-		if err != nil {
-			return nil, err
-		}
-
-		previous.next = BigEndian(offset)
-	}
-
-	return newMeta, nil
-}
-
 func (f *file) nextMeta() error {
 
 	if UnBigEndian(f.current.next) == 0 {
@@ -268,14 +203,12 @@ func (f *file) nextMeta() error {
 	return nil
 }
 
-func BigEndian(i int64) [8]byte {
-	b := [8]byte{}
-	binary.BigEndian.PutUint64(b[:], uint64(i))
-	return b
-}
-
-func UnBigEndian(b [8]byte) int64 {
-	return int64(binary.BigEndian.Uint64(b[:]))
+type uniteFile struct {
+	mu      sync.RWMutex
+	file    *syncFile
+	headers []header
+	//idleHeaders *header
+	idleMetas *meta
 }
 
 func (u *uniteFile) Open(name string) (*file, error) {
@@ -515,6 +448,73 @@ func (u *uniteFile) FileList() []string {
 
 func (u *uniteFile) Close() error {
 	return u.file.Close()
+}
+
+func (u *uniteFile) createNewMeta(previous *meta) (*meta, error) {
+
+	var newMeta *meta
+
+	if u.idleMetas != nil {
+
+		m := u.idleMetas
+
+		b := make([]byte, unsafe.Offsetof(mMode.data))
+
+		if m.previous == zero {
+			u.idleMetas = nil
+		} else {
+
+			_, err := u.file.ReadAt(b, UnBigEndian(m.previous))
+			if err != nil {
+				return nil, err
+			}
+
+			previous := (*meta)(unsafe.Pointer(&b[0]))
+
+			previous.next = zero
+			_, err = u.file.WriteAt(previous.next[:], UnBigEndian(previous.offset)+int64(unsafe.Offsetof(mMode.next)))
+			if err != nil {
+				return nil, err
+			}
+
+			u.idleMetas = previous
+		}
+
+		return m, nil
+
+	} else {
+
+		// create new meta
+		offset, err := u.file.Seek(0, 2)
+		if err != nil {
+			return nil, err
+		}
+
+		newMeta = &meta{
+			offset:    BigEndian(offset),
+			seq:       BigEndian(UnBigEndian(previous.seq) + 1),
+			start:     zero,
+			end:       BigEndian(METASIZE),
+			effective: zero,
+			next:      zero,
+			previous:  previous.offset,
+		}
+
+		_, err = u.file.Write((*(*[unsafe.Offsetof(mMode.data)]byte)(unsafe.Pointer(newMeta)))[:])
+		if err != nil {
+			return nil, err
+		}
+
+		b := BigEndian(offset)
+		_, err = u.file.WriteAt(b[:], UnBigEndian(previous.offset)+int64(unsafe.Offsetof(previous.next)))
+		if err != nil {
+			return nil, err
+		}
+
+		previous.next = BigEndian(offset)
+	}
+
+	return newMeta, nil
 }
 
 func CreateUniteFile(path string) (*uniteFile, error) {
