@@ -556,7 +556,7 @@ func CreateUniteFile(path string) (*Unite, error) {
 }
 
 func OpenUniteFile(path string) (*Unite, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|os.O_WRONLY, 0666)
+	f, err := os.OpenFile(path, os.O_RDWR, 0666)
 	if err != nil {
 		return nil, err
 	}
