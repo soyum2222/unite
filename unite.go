@@ -19,7 +19,7 @@ const (
 
 var (
 	NotFindFileError = errors.New("not find file")
-	FileTypeError    = errors.New(" the file is not a unite file")
+	FileTypeError    = errors.New("the file is not a unite file")
 	DamagedError     = errors.New("damaged file")
 	AlreadyExists    = errors.New("file already exists")
 	NameTooLongError = errors.New("file name too long")
