@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	METASIZE = 1024 * 1024 * 4
+	METASIZE = 1024 * 1024 * 1
 	MAGIC    = "unit"
 )
 
@@ -43,7 +43,7 @@ var hMode header
 var mMode meta
 
 var zero = BigEndian(0)
-var max = [8]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+var full = [8]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
 
 func BigEndian(i int64) [8]byte {
 	b := [8]byte{}
@@ -74,9 +74,6 @@ type file struct {
 }
 
 func (f *file) Write(b []byte) (n int, err error) {
-
-	f.u.mu.Lock()
-	defer f.u.mu.Unlock()
 
 	if f.head == nil {
 		meta, err := f.u.createNewMeta(&mMode)
@@ -118,14 +115,24 @@ func (f *file) Write(b []byte) (n int, err error) {
 
 		metaRemain := METASIZE - UnBigEndian(f.current.effective)
 		offset := UnBigEndian(f.current.offset) + int64(unsafe.Offsetof(f.current.data)) + UnBigEndian(f.current.effective)
-		bb := make([]byte, metaRemain)
-		nn := copy(bb, b)
-		n += nn
-		b = b[nn:]
-		_, err = f.u.file.WriteAt(bb[:nn], offset)
+
+		var bb []byte
+		var nn int
+
+		if metaRemain > int64(len(b)) {
+			bb = b
+			b = b[:0]
+		} else {
+			bb = b[:metaRemain]
+			b = b[metaRemain:]
+		}
+
+		nn, err = f.u.file.WriteAt(bb, offset)
 		if err != nil {
 			return 0, err
 		}
+
+		n += nn
 
 		f.current.effective = BigEndian(UnBigEndian(f.current.effective) + int64(nn))
 
@@ -149,9 +156,6 @@ func (f *file) Write(b []byte) (n int, err error) {
 }
 
 func (f *file) Read(b []byte) (n int, err error) {
-
-	f.u.mu.RLock()
-	defer f.u.mu.RUnlock()
 
 	for {
 		beginAddr := UnBigEndian(f.current.seq) * METASIZE
@@ -436,7 +440,7 @@ func (u *Unite) FileList() []string {
 	var list []string
 
 	for _, v := range u.headerMap {
-		if v.fileSymbol != zero && v.fileSymbol != max {
+		if v.fileSymbol != zero && v.fileSymbol != full {
 			i := bytes.IndexByte(v.fileName[:], 0)
 			list = append(list, string(v.fileName[:i]))
 		}
@@ -454,6 +458,9 @@ func (u *Unite) Close() error {
 }
 
 func (u *Unite) createNewMeta(previous *meta) (*meta, error) {
+
+	u.mu.Lock()
+	defer u.mu.Unlock()
 
 	var newMeta *meta
 
@@ -534,7 +541,7 @@ func CreateUniteFile(path string) (*Unite, error) {
 	originHeader := header{
 		offset:     BigEndian(int64(len([]byte(MAGIC)))),
 		seq:        zero,
-		fileSymbol: max,
+		fileSymbol: full,
 		fileName:   [32]byte{},
 		originData: zero,
 		size:       zero,
@@ -550,7 +557,7 @@ func CreateUniteFile(path string) (*Unite, error) {
 
 	return &Unite{
 		file:       &syncFile{File: f},
-		headerMap:  map[[8]byte]*header{max: &originHeader},
+		headerMap:  map[[8]byte]*header{full: &originHeader},
 		headerList: []*header{&originHeader},
 	}, nil
 }
@@ -595,7 +602,7 @@ func OpenUniteFile(path string) (*Unite, error) {
 		} else {
 			hMap[h.fileSymbol] = &h
 
-			if h.fileSymbol == max {
+			if h.fileSymbol == full {
 
 				next := h.originData
 				if next != zero {
