@@ -161,18 +161,10 @@ func (f *file) Read(b []byte) (n int, err error) {
 		beginAddr := UnBigEndian(f.current.seq) * METASIZE
 		currentMetaOffset := f.cursor - beginAddr
 
-		metaRemain := UnBigEndian(f.current.effective) - currentMetaOffset
+		//metaRemain := UnBigEndian(f.current.effective) - currentMetaOffset
 
-		var bb []byte
-		if metaRemain > int64(len(b)) {
-			bb = make([]byte, len(b))
-		} else {
-			bb = make([]byte, metaRemain)
-		}
+		nn := copy(b, f.current.data[currentMetaOffset:UnBigEndian(f.current.effective)])
 
-		nn := copy(bb, f.current.data[currentMetaOffset:])
-
-		copy(b, bb)
 		b = b[nn:]
 		f.cursor += int64(nn)
 		n += nn
