@@ -119,7 +119,7 @@ func (f *file) Write(b []byte) (n int, err error) {
 		var bb []byte
 		var nn int
 
-		if metaRemain > int64(len(b)) {
+		if metaRemain >= int64(len(b)) {
 			bb = b
 			b = b[:0]
 		} else {
