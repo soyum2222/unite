@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	METASIZE = 1024 * 1024 * 1
+	METASIZE = 1024 * 128
 	MAGIC    = "unit"
 )
 
@@ -63,7 +63,7 @@ type meta struct {
 	effective [8]byte
 	next      [8]byte
 	previous  [8]byte
-	data      [METASIZE]byte
+	data      [8]byte
 }
 
 type file struct {
