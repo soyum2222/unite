@@ -63,7 +63,7 @@ type meta struct {
 	effective [8]byte
 	next      [8]byte
 	previous  [8]byte
-	data      [8]byte
+	data      [METASIZE]byte
 }
 
 type file struct {
