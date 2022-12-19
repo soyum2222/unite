@@ -33,3 +33,9 @@ func (f *syncFile) ReadAt(b []byte, off int64) (n int, err error) {
 	defer f.Unlock()
 	return f.File.ReadAt(b, off)
 }
+
+func (f *syncFile) Close() error {
+	f.Lock()
+	defer f.Unlock()
+	return f.File.Close()
+}
