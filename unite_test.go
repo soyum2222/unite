@@ -448,3 +448,75 @@ func TestGetFileName(t *testing.T) {
 
 	_ = unite.Close()
 }
+
+func TestMetaFull(t *testing.T) {
+
+	TestCreateUniteFile(t)
+	unite, err := OpenUniteFile("./test.unite")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	f, err := unite.Create("foo")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	b := make([]byte, METASIZE)
+
+	_, err = f.Write(b)
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	_, err = f.Write([]byte("hello"))
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	_ = f.Close()
+	_ = unite.Close()
+
+	unite, err = OpenUniteFile("./test.unite")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	f, err = unite.Open("foo")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	b = make([]byte, METASIZE+5)
+	_, err = f.Read(b)
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	if string(b[METASIZE:]) != "hello" {
+		fmt.Println("read error")
+		t.Fail()
+		return
+	}
+
+	_ = unite.Close()
+}

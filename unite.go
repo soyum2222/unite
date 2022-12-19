@@ -502,7 +502,7 @@ func (u *Unite) createNewMeta(previous *meta) (*meta, error) {
 			previous:  previous.offset,
 		}
 
-		_, err = u.file.Write((*(*[unsafe.Offsetof(mMode.data)]byte)(unsafe.Pointer(newMeta)))[:])
+		_, err = u.file.Write((*(*[unsafe.Sizeof(mMode)]byte)(unsafe.Pointer(newMeta)))[:])
 		if err != nil {
 			return nil, err
 		}
