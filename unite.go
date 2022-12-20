@@ -397,7 +397,7 @@ func (u *Unite) Remove(name string) error {
 			m = (*meta)(unsafe.Pointer(&b[0]))
 			m.seq = zero
 			m.effective = zero
-
+			m.start = zero
 			next = m.next
 
 			if u.idleMetas != nil {
@@ -474,6 +474,10 @@ func (u *Unite) createNewMeta(previous *meta) (*meta, error) {
 			previous := (*meta)(unsafe.Pointer(&b[0]))
 
 			previous.next = zero
+			previous.seq = zero
+			previous.start = zero
+			previous.effective = zero
+
 			_, err = u.file.WriteAt(previous.next[:], UnBigEndian(previous.offset)+int64(unsafe.Offsetof(mMode.next)))
 			if err != nil {
 				return nil, err
@@ -502,7 +506,13 @@ func (u *Unite) createNewMeta(previous *meta) (*meta, error) {
 			previous:  previous.offset,
 		}
 
-		_, err = u.file.Write((*(*[unsafe.Sizeof(mMode)]byte)(unsafe.Pointer(newMeta)))[:])
+		_, err = u.file.Write((*(*[unsafe.Offsetof(mMode.data)]byte)(unsafe.Pointer(newMeta)))[:])
+		if err != nil {
+			return nil, err
+		}
+
+		// populate meta data
+		_, err = u.file.WriteAt([]byte{0}, UnBigEndian(newMeta.offset)+int64(unsafe.Offsetof(mMode.data))+int64(METASIZE))
 		if err != nil {
 			return nil, err
 		}
