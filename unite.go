@@ -26,21 +26,49 @@ var (
 )
 
 type header struct {
-	end        bool
-	fileName   [32]byte
+	offset     [8]byte
 	fileSymbol [8]byte
 	createTime [8]byte
 	modifyTime [8]byte
-	seq        [8]byte
-	offset     [8]byte
 	size       [8]byte
-	next       [8]byte
-	previous   [8]byte
 	originData [8]byte
+	fileName   [32]byte
+}
+
+type headerArea struct {
+	headers  [1024]header
+	offset   [8]byte
+	next     [8]byte
+	previous [8]byte
+}
+
+func createHeaderArea(offset, previous [8]byte) *headerArea {
+	var ha headerArea
+
+	ha.offset = offset
+	ha.previous = previous
+
+	size := int64(unsafe.Sizeof(hMode))
+	for k := range ha.headers {
+		ha.headers[k].offset = BigEndian(UnBigEndian(offset) + int64(k)*size)
+	}
+
+	return &ha
 }
 
 var hMode header
 var mMode meta
+var haMode headerArea
+
+var originMeta = meta{
+	offset:    BigEndian(0),
+	seq:       BigEndian(-1),
+	start:     BigEndian(0),
+	end:       BigEndian(0),
+	effective: BigEndian(0),
+	next:      BigEndian(0),
+	previous:  BigEndian(0),
+}
 
 var zero = BigEndian(0)
 var full = [8]byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
@@ -76,7 +104,9 @@ type file struct {
 func (f *file) Write(b []byte) (n int, err error) {
 
 	if f.head == nil {
-		meta, err := f.u.createNewMeta(&mMode)
+		f.u.mu.Lock()
+		meta, err := f.u.createNewMeta(&originMeta)
+		f.u.mu.Unlock()
 		if err != nil {
 			return 0, err
 		}
@@ -90,7 +120,9 @@ func (f *file) Write(b []byte) (n int, err error) {
 		for {
 			if UnBigEndian(f.current.next) == 0 {
 
+				f.u.mu.Lock()
 				meta, err := f.u.createNewMeta(f.current)
+				f.u.mu.Unlock()
 				if err != nil {
 					return 0, err
 				}
@@ -146,7 +178,9 @@ func (f *file) Write(b []byte) (n int, err error) {
 		if len(b) == 0 {
 			return n, nil
 		} else {
+			f.u.mu.Lock()
 			meta, err := f.u.createNewMeta(f.current)
+			f.u.mu.Unlock()
 			if err != nil {
 				return 0, err
 			}
@@ -205,6 +239,7 @@ func (f *file) nextMeta() error {
 type Unite struct {
 	mu          sync.RWMutex
 	file        *syncFile
+	headerArea  *headerArea
 	headerMap   map[[8]byte]*header
 	headerList  []*header
 	idleHeaders []*header
@@ -280,37 +315,47 @@ func (u *Unite) Create(name string) (*file, error) {
 			return nil, err
 		}
 
+		_, err = u.file.WriteAt(nameBytes[:], UnBigEndian(h.offset)+int64(unsafe.Offsetof(h.fileName)))
+		if err != nil {
+			return nil, err
+		}
+
+		// create new meta
+		meta, err := u.createNewMeta(&originMeta)
+		if err != nil {
+			return nil, err
+		}
+
+		h.originData = meta.offset
+		_, err = u.file.WriteAt(h.originData[:], UnBigEndian(h.offset)+int64(unsafe.Offsetof(h.originData)))
+		if err != nil {
+			return nil, err
+		}
+
+		u.headerMap[sy] = h
+		u.idleHeaders = u.idleHeaders[1:]
+
 		return &file{
 			u:       u,
-			head:    nil,
-			current: nil,
+			head:    meta,
+			current: meta,
 			cursor:  0,
 		}, err
-	}
-
-	tail := u.headerList[len(u.headerList)-1]
-
-	if tail.end {
+	} else {
 
 		offset, err := u.file.Seek(0, 2)
 		if err != nil {
 			return nil, err
 		}
 
-		h := header{
-			offset:     BigEndian(offset),
-			seq:        BigEndian(UnBigEndian(tail.seq) + 1),
-			fileSymbol: sy,
-			fileName:   nameBytes,
-			originData: BigEndian(offset + int64(unsafe.Sizeof(hMode))),
-			size:       zero,
-			next:       zero,
-			previous:   tail.offset,
-			end:        true,
-		}
+		ha := createHeaderArea(BigEndian(offset), u.headerArea.offset)
+		ha.headers[0].fileSymbol = sy
+		ha.headers[0].fileName = nameBytes
+		ha.headers[0].originData = BigEndian(offset + int64(unsafe.Sizeof(ha)))
+		ha.headers[0].size = zero
 
 		m := meta{
-			offset:    BigEndian(offset + int64(unsafe.Sizeof(hMode))),
+			offset:    BigEndian(offset + int64(unsafe.Sizeof(ha))),
 			seq:       zero,
 			start:     zero,
 			end:       BigEndian(METASIZE),
@@ -319,7 +364,7 @@ func (u *Unite) Create(name string) (*file, error) {
 			previous:  zero,
 		}
 
-		_, err = u.file.Write((*(*[unsafe.Sizeof(h)]byte)(unsafe.Pointer(&h)))[:])
+		_, err = u.file.Write((*(*[unsafe.Sizeof(ha)]byte)(unsafe.Pointer(&ha)))[:])
 		if err != nil {
 			return nil, err
 		}
@@ -330,19 +375,23 @@ func (u *Unite) Create(name string) (*file, error) {
 			return nil, err
 		}
 
-		// update tail
-		_, err = u.file.WriteAt([]byte{0}, UnBigEndian(tail.offset)+int64(unsafe.Offsetof(hMode.end)))
+		u.headerList = append(u.headerList, &ha.headers[0])
+		u.headerMap[sy] = &ha.headers[0]
+
+		u.headerArea.next = BigEndian(offset)
+
+		foo := BigEndian(offset)
+		_, err = u.file.WriteAt(foo[:], UnBigEndian(u.headerArea.offset)+int64(unsafe.Offsetof(haMode.next)))
 		if err != nil {
 			return nil, err
 		}
 
-		_, err = u.file.WriteAt(h.offset[:], UnBigEndian(tail.offset)+int64(unsafe.Offsetof(hMode.next)))
-		if err != nil {
-			return nil, err
+		var idleHeader []*header
+		for k := range ha.headers[1:] {
+			idleHeader = append(idleHeader, &ha.headers[k])
 		}
 
-		u.headerList = append(u.headerList, &h)
-		u.headerMap[sy] = &h
+		u.idleHeaders = append(u.idleHeaders, idleHeader...)
 
 		return &file{
 			u:       u,
@@ -350,9 +399,6 @@ func (u *Unite) Create(name string) (*file, error) {
 			current: &m,
 			cursor:  0,
 		}, nil
-
-	} else {
-		return nil, errors.New("unknown error")
 	}
 }
 
@@ -403,7 +449,7 @@ func (u *Unite) Remove(name string) error {
 			if u.idleMetas != nil {
 
 				u.idleMetas.next = m.offset
-				_, err = u.file.WriteAt(m.offset[:], UnBigEndian(u.idleMetas.previous)+int64(unsafe.Offsetof(mMode.next)))
+				_, err = u.file.WriteAt(m.offset[:], UnBigEndian(u.idleMetas.offset)+int64(unsafe.Offsetof(mMode.next)))
 				if err != nil {
 					return err
 				}
@@ -450,9 +496,9 @@ func (u *Unite) Close() error {
 }
 
 func (u *Unite) createNewMeta(previous *meta) (*meta, error) {
-
-	u.mu.Lock()
-	defer u.mu.Unlock()
+	//
+	//u.mu.Lock()
+	//defer u.mu.Unlock()
 
 	var newMeta *meta
 
@@ -471,19 +517,19 @@ func (u *Unite) createNewMeta(previous *meta) (*meta, error) {
 				return nil, err
 			}
 
-			previous := (*meta)(unsafe.Pointer(&b[0]))
+			pre := (*meta)(unsafe.Pointer(&b[0]))
 
-			previous.next = zero
-			previous.seq = zero
-			previous.start = zero
-			previous.effective = zero
+			pre.next = zero
+			pre.seq = zero
+			pre.start = zero
+			pre.effective = zero
 
-			_, err = u.file.WriteAt(previous.next[:], UnBigEndian(previous.offset)+int64(unsafe.Offsetof(mMode.next)))
+			_, err = u.file.WriteAt(pre.next[:], UnBigEndian(pre.offset)+int64(unsafe.Offsetof(mMode.next)))
 			if err != nil {
 				return nil, err
 			}
 
-			u.idleMetas = previous
+			u.idleMetas = pre
 		}
 
 		return m, nil
@@ -518,9 +564,11 @@ func (u *Unite) createNewMeta(previous *meta) (*meta, error) {
 		}
 
 		b := BigEndian(offset)
-		_, err = u.file.WriteAt(b[:], UnBigEndian(previous.offset)+int64(unsafe.Offsetof(previous.next)))
-		if err != nil {
-			return nil, err
+		if previous.offset != zero {
+			_, err = u.file.WriteAt(b[:], UnBigEndian(previous.offset)+int64(unsafe.Offsetof(previous.next)))
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		previous.next = BigEndian(offset)
@@ -542,25 +590,32 @@ func CreateUniteFile(path string) (*Unite, error) {
 
 	originHeader := header{
 		offset:     BigEndian(int64(len([]byte(MAGIC)))),
-		seq:        zero,
 		fileSymbol: full,
 		fileName:   [32]byte{},
 		originData: zero,
 		size:       zero,
-		next:       zero,
-		previous:   zero,
-		end:        true,
 	}
 
-	_, err = f.Write((*(*[unsafe.Sizeof(hMode)]byte)(unsafe.Pointer(&originHeader)))[:unsafe.Sizeof(hMode)])
+	ha := createHeaderArea(originHeader.offset, zero)
+	ha.headers[0] = originHeader
+
+	_, err = f.Write((*(*[unsafe.Sizeof(haMode)]byte)(unsafe.Pointer(ha)))[:unsafe.Sizeof(haMode)])
 	if err != nil {
 		return nil, err
 	}
 
+	var idleHeaders []*header
+
+	for k := range ha.headers[1:] {
+		idleHeaders = append(idleHeaders, &ha.headers[k])
+	}
+
 	return &Unite{
-		file:       &syncFile{File: f},
-		headerMap:  map[[8]byte]*header{full: &originHeader},
-		headerList: []*header{&originHeader},
+		file:        &syncFile{File: f},
+		headerMap:   map[[8]byte]*header{full: &originHeader},
+		headerList:  []*header{&originHeader},
+		headerArea:  ha,
+		idleHeaders: idleHeaders,
 	}, nil
 }
 
@@ -581,10 +636,10 @@ func OpenUniteFile(path string) (*Unite, error) {
 		return nil, FileTypeError
 	}
 
-	headerSize := unsafe.Sizeof(hMode)
-	hd := make([]byte, headerSize)
+	headerAreaSize := unsafe.Sizeof(headerArea{})
+	haR := make([]byte, headerAreaSize)
 
-	_, err = io.ReadFull(f, hd)
+	_, err = io.ReadFull(f, haR)
 	if err != nil {
 		return nil, err
 	}
@@ -595,41 +650,42 @@ func OpenUniteFile(path string) (*Unite, error) {
 	hMap := map[[8]byte]*header{}
 
 	for {
-		h := *(*header)(unsafe.Pointer(&hd[0]))
 
-		hList = append(hList, &h)
+		ha := *(*headerArea)(unsafe.Pointer(&haR[0]))
 
-		if h.fileSymbol == zero {
-			idleHeader = append(idleHeader, &h)
-		} else {
-			hMap[h.fileSymbol] = &h
+		for k := range ha.headers {
+			h := ha.headers[k]
 
-			if h.fileSymbol == full {
+			hList = append(hList, &h)
 
-				next := h.originData
-				if next != zero {
-					b := make([]byte, unsafe.Offsetof(mMode.data))
-					_, err = f.ReadAt(hd, UnBigEndian(next))
-					if err != nil {
-						return nil, err
+			if h.fileSymbol == zero {
+				idleHeader = append(idleHeader, &h)
+			} else {
+				hMap[h.fileSymbol] = &h
+
+				if h.fileSymbol == full {
+
+					next := h.originData
+					if next != zero {
+						b := make([]byte, unsafe.Offsetof(mMode.data))
+						_, err = f.ReadAt(b, UnBigEndian(next))
+						if err != nil {
+							return nil, err
+						}
+
+						m = (*meta)(unsafe.Pointer(&b[0]))
 					}
-
-					m = (*meta)(unsafe.Pointer(&b[0]))
 				}
 			}
 		}
 
-		if h.end {
+		if ha.next == zero {
 			break
-		}
-
-		n, err := f.ReadAt(hd, UnBigEndian(h.next))
-		if err != nil {
-			return nil, err
-		}
-
-		if n != int(headerSize) {
-			return nil, DamagedError
+		} else {
+			_, err = f.ReadAt(haR, UnBigEndian(ha.next))
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
