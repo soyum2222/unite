@@ -606,7 +606,10 @@ func CreateUniteFile(path string) (*Unite, error) {
 
 	var idleHeaders []*header
 
-	for k := range ha.headers[1:] {
+	for k := range ha.headers {
+		if k == 0 {
+			break
+		}
 		idleHeaders = append(idleHeaders, &ha.headers[k])
 	}
 
