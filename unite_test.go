@@ -3,7 +3,10 @@ package unite
 import (
 	"fmt"
 	"io"
+	"math/rand"
+	"sort"
 	"testing"
+	"time"
 )
 
 func TestCreateUniteFile(t *testing.T) {
@@ -519,4 +522,52 @@ func TestMetaFull(t *testing.T) {
 	}
 
 	_ = unite.Close()
+}
+
+func TestCreateHugeFile(t *testing.T) {
+
+	u, err := CreateUniteFile("./test.unite")
+	if err != nil {
+		t.Fail()
+		panic(err)
+	}
+
+	for i := 0; i < 10000; i++ {
+
+		// get a rand number
+		rand.Seed(time.Now().UnixNano())
+		r := rand.Intn(10000)
+		b := make([]byte, r)
+
+		f, err := u.Create(fmt.Sprintf("%d", i))
+		if err != nil {
+			t.Fail()
+			panic(err)
+		}
+
+		_, err = f.Write(b)
+		if err != nil {
+			t.Fail()
+			panic(err)
+		}
+	}
+
+	_ = u.Close()
+
+	u, err = OpenUniteFile("./test.unite")
+	if err != nil {
+		t.Fail()
+		panic(err)
+	}
+
+	names := u.FileList()
+
+	sort.Slice(names, func(i, j int) bool {
+		return names[i] < names[j]
+	})
+
+	if len(names) != 10000 {
+		t.Fail()
+		return
+	}
 }
