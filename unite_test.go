@@ -571,3 +571,61 @@ func TestCreateHugeFile(t *testing.T) {
 		return
 	}
 }
+
+func TestReUseMeta(t *testing.T) {
+
+	TestWriteHuge(t)
+
+	unite, err := OpenUniteFile("./test.unite")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	err = unite.Remove("unite.data")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	file, err := unite.Create("unite2.data")
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	_, err = file.Write([]byte("hello world"))
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	b := make([]byte, 1024)
+	n, err := file.Read(b)
+	if err != nil && err != io.EOF {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	if string(b[:n]) != "hello world" {
+		fmt.Println("read error")
+		t.Fail()
+		return
+	}
+
+	b = make([]byte, 1<<31)
+
+	_, err = file.Write(b)
+	if err != nil {
+		fmt.Println(err)
+		t.Fail()
+		return
+	}
+
+	_ = file.Close()
+}
